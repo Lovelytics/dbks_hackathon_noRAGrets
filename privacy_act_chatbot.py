@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0
+# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0 mypy_extensions==1.0.0 distro==1.9.0 pillow==10.2.0 filelock==3.11.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -52,25 +52,32 @@ from transformers import AutoTokenizer
 from pyspark.sql.functions import pandas_udf
 from typing import Iterator
 import pandas as pd
+import os
 
 # Reduce the arrow batch size as our PDF can be big in memory
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+os.environ["HF_HOME"] = '/tmp'
 
 @pandas_udf("array<string>")
 def read_as_chunk(batch_iter: Iterator[pd.Series]) -> Iterator[pd.Series]:
     #set llama2 as tokenizer to match our model size (will stay below BGE 1024 limit)
     set_global_tokenizer(
-      AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+      AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer", cache_dir = '/tmp')
     )
     #Sentence splitter from llama_index to split on sentences
     splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
     def extract_and_split(b):
       txt = extract_doc_text(b)
       nodes = splitter.get_nodes_from_documents([Document(text=txt)])
-      return [n.text for n in nodes]
-
+      
+    my_list = []
     for x in batch_iter:
-        yield x.apply(extract_and_split)
+      my_list.append(x.apply(extract_and_split))
+      print(my_list)
+      #  yield x.apply(extract_and_split)
+
+    return my_list
 
 # COMMAND ----------
 
@@ -118,12 +125,41 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
-# MAGIC %pip install mypy_extensions
+
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 import mypy_extensions
+from llama_index.langchain_helpers.text_splitter import SentenceSplitter
+from llama_index import Document, set_global_tokenizer
+from transformers import AutoTokenizer
+from pyspark.sql.functions import pandas_udf
+from typing import Iterator
+import pandas as pd
+import os
+
+# # Reduce the arrow batch size as our PDF can be big in memory
+# spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+# os.environ["HF_HOME"] = '/tmp'
+
+# set_global_tokenizer(
+#   AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer", cache_dir = '/tmp')
+# )
+# #Sentence splitter from llama_index to split on sentences
+# splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
+# def extract_and_split(b):
+#   txt = extract_doc_text(b)
+#   nodes = splitter.get_nodes_from_documents([Document(text=txt)])
+#   return [n.text for n in nodes]
+
+# col = spark.table('demo.hackathon.pdf_raw')
+# pd_col = col.toPandas()
+
+# pd_col["content"].apply(extract_and_split)
+
+volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/Colorado"
 
 (spark.readStream.table('demo.hackathon.pdf_raw')
       .withColumn("content", F.explode(read_as_chunk("content")))
@@ -131,8 +167,17 @@ import mypy_extensions
       .selectExpr('path as url', 'content', 'embedding')
   .writeStream
     .trigger(availableNow=True)
-    .option("checkpointLocation", f'dbfs:/Volumes/demo/hackathon/privacy_act_docs/Colorado/checkpoints/pdf_chunk')
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk')
     .table('demo.hackathon.databricks_pdf_documentation').awaitTermination())
+
+# (spark.readStream.table('demo.hackathon.pdf_raw')
+#       .withColumn("content", F.explode(read_as_chunk("content")))
+#       .withColumn("embedding", get_embedding("content"))
+#       .selectExpr('path as url', 'content', 'embedding')
+#   .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", f'dbfs:/Volumes/demo/hackathon/privacy_act_docs/Colorado/checkpoints/pdf_chunk')
+#     .table('demo.hackathon.databricks_pdf_documentation').awaitTermination())
 
 # #Let's also add our documentation web page from the simple demo (make sure you run the quickstart demo first)
 # if table_exists('demo.hackathon.databricks_documentation'):
@@ -143,3 +188,7 @@ import mypy_extensions
 #     .trigger(availableNow=True)
 #     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/docs_chunks')
 #     .table('databricks_pdf_documentation').awaitTermination())
+
+# COMMAND ----------
+
+
