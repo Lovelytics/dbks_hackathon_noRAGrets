@@ -120,4 +120,39 @@ print(embeddings)
 
 # COMMAND ----------
 
+from databricks.vector_search.client import VectorSearchClient
+# Automatically generates a PAT Token for authentication
+client = VectorSearchClient()
 
+# Uses the service principal token for authentication
+# client = VectorSearch(service_principal_client_id=<CLIENT_ID>,service_principal_client_secret=<CLIENT_SECRET>)
+
+client.create_endpoint(
+    name="vector_search_endpoint",
+    endpoint_type="STANDARD"
+)
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+
+spark_df = spark.table("demo.hackathon.pdf_raw")
+spark_df = spark_df.withColumn('content', col('content').cast('string'))
+spark_df.write.saveAsTable("demo.hackathon.pdf_raw_content_str")
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE demo.hackathon.pdf_raw_content_str SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+
+# COMMAND ----------
+
+index = client.create_delta_sync_index(
+  endpoint_name="vector_search_endpoint",
+  source_table_name="demo.hackathon.pdf_raw_content_str",
+  index_name="demo.hackathon.pdf_index",
+  pipeline_type='TRIGGERED',
+  primary_key="path",
+  embedding_source_column="content",
+  embedding_model_endpoint_name="databricks-bge-large-en"
+)
