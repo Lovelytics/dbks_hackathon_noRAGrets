@@ -8,7 +8,13 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install langchain==0.1.0 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==1.10.9 mlflow==2.9.0 lxml==4.9.3 pypdf
+# %pip install langchain==0.1.0 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic==1.10.9 mlflow==2.9.0 lxml==4.9.3 pypdf databricks-genai-inference
+
+# dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# MAGIC %pip install langchain==0.1.0 llama-index==0.9.3 databricks-vectorsearch==0.22 pydantic mlflow==2.9.0 lxml==4.9.3 pypdf databricks-genai-inference
 # MAGIC
 # MAGIC dbutils.library.restartPython()
 
@@ -120,4 +126,48 @@ print(embeddings)
 
 # COMMAND ----------
 
+@pandas_udf("array<float>")
+def get_embedding(contents: pd.Series) -> pd.Series:
+    import mlflow.deployments
+    deploy_client = mlflow.deployments.get_deploy_client("databricks")
+    def get_embeddings(batch):
+        #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+        response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": batch})
+        return [e['embedding'] for e in response.data]
 
+    # Splitting the contents into batches of 150 items each, since the embedding model takes at most 150 inputs per request.
+    max_batch_size = 150
+    batches = [contents.iloc[i:i + max_batch_size] for i in range(0, len(contents), max_batch_size)]
+
+    # Process each batch and collect the results
+    all_embeddings = []
+    for batch in batches:
+        all_embeddings += get_embeddings(batch.tolist())
+
+    return pd.Series(all_embeddings)
+
+# COMMAND ----------
+
+df = spark.createDataFrame(splits)
+df.show()
+
+# COMMAND ----------
+
+df.select("page_content").show()
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+
+# COMMAND ----------
+
+get_embedding(df["page_content"])
+
+# COMMAND ----------
+
+# from databricks_genai_inference import Embedding
+
+# response = Embedding.create(
+#     model="bge-large-en",
+#     input=splits.page_content)
+# print(f'embeddings: {response.embeddings}')
