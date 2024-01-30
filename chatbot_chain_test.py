@@ -67,4 +67,4 @@ retrieve_document_chain = (
     | RunnableLambda(extract_question)
     | retriever
 )
-print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "What is the effective date for the Colorado Privacy Act?"}]}))
+print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "What do data rights mean?"}]}))
