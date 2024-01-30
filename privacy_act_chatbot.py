@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0 protobuf==3.20.0
+# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" langchain==0.0.319 llama-index==0.9.3 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0 protobuf==3.20.0 openai
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -149,7 +149,7 @@ client = AzureOpenAI(
     
     )
 
-def open_ai_embeddings(content: str, client):
+def open_ai_embeddings(content: str):
     embed_model = "nous-ue2-openai-sbx-base-deploy-text-embedding-ada-002"
 
     response = client.embeddings.create(
@@ -159,11 +159,7 @@ def open_ai_embeddings(content: str, client):
 
     return response.data[0].embedding
 
-openai_udf = F.udf(lambda x: open_ai_embeddings(x, client), StringType())
-
-# COMMAND ----------
-
-
+# openai_udf = F.udf(lambda x: open_ai_embeddings(x, client), StringType())
 
 # COMMAND ----------
 
@@ -188,9 +184,10 @@ openai_udf = F.udf(lambda x: open_ai_embeddings(x, client), StringType())
 # pd_col["content"].apply(extract_and_split)
 
 volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/*"
+from pyspark.sql.functions import lit
 
 temp = spark.table('demo.hackathon.databricks_pdf_documentation') \
-      .withColumn("embedding", openai_udf("content", client)) \
+      .withColumn("embedding", lit(open_ai_embeddings("content"))) \
       .selectExpr('url', 'content', 'embedding')
 
 temp.write \
