@@ -29,6 +29,10 @@ df = (spark.readStream
 
 # COMMAND ----------
 
+dbutils.secrets.list('dev_demo')
+
+# COMMAND ----------
+
 from unstructured.partition.auto import partition
 import re
 import io
@@ -63,6 +67,9 @@ from typing import Iterator
 import pandas as pd
 import os
 import logging
+from pyspark.sql import functions as F
+import mypy_extensions
+
 
 # Reduce the arrow batch size as our PDF can be big in memory
 spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
@@ -130,6 +137,148 @@ def get_embedding(contents: pd.Series) -> pd.Series:
         all_embeddings += get_embeddings(batch.tolist())
 
     return pd.Series(all_embeddings)
+
+# COMMAND ----------
+
+from openai import AzureOpenAI
+
+client = AzureOpenAI(
+    api_key = dbutils.secrets.get(scope='dev_demo', key='azure_openai_api_key'),
+    api_version = "2023-05-15",
+    azure_endpoint = "https://nous-ue2-openai-sbx-openai.openai.azure.com/",
+    
+    )
+
+def open_ai_embeddings(content: str, client):
+    embed_model = "nous-ue2-openai-sbx-base-deploy-text-embedding-ada-002"
+
+    response = client.embeddings.create(
+        input = content,
+        model = embed_model
+    )
+
+    return response.data[0].embedding
+
+openai_udf = F.udf(lambda x: open_ai_embeddings(x, client), StringType())
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# # Reduce the arrow batch size as our PDF can be big in memory
+# spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+# os.environ["HF_HOME"] = '/tmp'
+
+# set_global_tokenizer(
+#   AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer", cache_dir = '/tmp')
+# )
+# #Sentence splitter from llama_index to split on sentences
+# splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
+# def extract_and_split(b):
+#   txt = extract_doc_text(b)
+#   nodes = splitter.get_nodes_from_documents([Document(text=txt)])
+#   return [n.text for n in nodes]
+
+# col = spark.table('demo.hackathon.pdf_raw')
+# pd_col = col.toPandas()
+
+# pd_col["content"].apply(extract_and_split)
+
+volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/*"
+
+temp = spark.table('demo.hackathon.databricks_pdf_documentation') \
+      .withColumn("embedding", openai_udf("content", client)) \
+      .selectExpr('url', 'content', 'embedding')
+
+temp.write \
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_openai') \
+    .mode("overwrite") \
+    .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai')
+
+# (spark.readStream.table('demo.hackathon.pdf_raw')
+#       .withColumn("content", F.explode(read_as_chunk("content")))
+#       .withColumn("embedding", get_embedding("content"))
+#       .selectExpr('path as url', 'content', 'embedding')
+#   .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", f'dbfs:/Volumes/demo/hackathon/privacy_act_docs/Colorado/checkpoints/pdf_chunk')
+#     .table('demo.hackathon.databricks_pdf_documentation').awaitTermination())
+
+# #Let's also add our documentation web page from the simple demo (make sure you run the quickstart demo first)
+# if table_exists('demo.hackathon.databricks_documentation'):
+#   (spark.readStream.table('databricks_documentation')
+#       .withColumn('embedding', get_embedding("content"))
+#       .select('url', 'content', 'embedding')
+#   .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/docs_chunks')
+#     .table('databricks_pdf_documentation').awaitTermination())
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+import mypy_extensions
+from llama_index.langchain_helpers.text_splitter import SentenceSplitter
+from llama_index import Document, set_global_tokenizer
+from transformers import AutoTokenizer
+from pyspark.sql.functions import pandas_udf
+from typing import Iterator
+import pandas as pd
+import os
+
+# # Reduce the arrow batch size as our PDF can be big in memory
+# spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+# os.environ["HF_HOME"] = '/tmp'
+
+# set_global_tokenizer(
+#   AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer", cache_dir = '/tmp')
+# )
+# #Sentence splitter from llama_index to split on sentences
+# splitter = SentenceSplitter(chunk_size=500, chunk_overlap=50)
+# def extract_and_split(b):
+#   txt = extract_doc_text(b)
+#   nodes = splitter.get_nodes_from_documents([Document(text=txt)])
+#   return [n.text for n in nodes]
+
+# col = spark.table('demo.hackathon.pdf_raw')
+# pd_col = col.toPandas()
+
+# pd_col["content"].apply(extract_and_split)
+
+volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/*"
+
+temp = spark.table('demo.hackathon.pdf_raw') \
+      .withColumn("content", F.explode(read_as_chunk("content"))) \
+      .withColumn("embedding", get_embedding("content")) \
+      .selectExpr('path as url', 'content', 'embedding')
+
+temp.write \
+    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk') \
+    .mode("overwrite") \
+    .saveAsTable('demo.hackathon.databricks_pdf_documentation')
+
+# (spark.readStream.table('demo.hackathon.pdf_raw')
+#       .withColumn("content", F.explode(read_as_chunk("content")))
+#       .withColumn("embedding", get_embedding("content"))
+#       .selectExpr('path as url', 'content', 'embedding')
+#   .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", f'dbfs:/Volumes/demo/hackathon/privacy_act_docs/Colorado/checkpoints/pdf_chunk')
+#     .table('demo.hackathon.databricks_pdf_documentation').awaitTermination())
+
+# #Let's also add our documentation web page from the simple demo (make sure you run the quickstart demo first)
+# if table_exists('demo.hackathon.databricks_documentation'):
+#   (spark.readStream.table('databricks_documentation')
+#       .withColumn('embedding', get_embedding("content"))
+#       .select('url', 'content', 'embedding')
+#   .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/docs_chunks')
+#     .table('databricks_pdf_documentation').awaitTermination())
 
 # COMMAND ----------
 
