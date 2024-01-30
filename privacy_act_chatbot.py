@@ -196,10 +196,6 @@ temp.write \
 
 # COMMAND ----------
 
-spark.sql("SELECT * FROM demo.hackathon.databricks_pdf_documentation").show()
-
-# COMMAND ----------
-
 from databricks.vector_search.client import VectorSearchClient
 vsc = VectorSearchClient()
 
@@ -221,10 +217,10 @@ source_table_fullname = f"{catalog}.{db}.databricks_pdf_documentation"
 # Where we want to store our index
 vs_index_fullname = f"{catalog}.{db}.databricks_pdf_documentation_self_managed_vs_index"
 
-if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
-  print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
+if not index_exists(vsc, "privacy_vector_search", vs_index_fullname):
+  print(f"Creating index {vs_index_fullname} on endpoint privacy_vector_search...")
   vsc.create_delta_sync_index(
-    endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
+    endpoint_name="privacy_vector_search",
     index_name=vs_index_fullname,
     source_table_name=source_table_fullname,
     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
@@ -234,7 +230,21 @@ if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
   )
 else:
   #Trigger a sync to update our vs content with the new data saved in the table
-  vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).sync()
+  vsc.get_index("privacy_vector_search", vs_index_fullname).sync()
 
 #Let's wait for the index to be ready and all our embeddings to be created and indexed
 wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
+
+# COMMAND ----------
+
+question = "When did the colorado privacy act go into effect?"
+
+response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
+embeddings = [e['embedding'] for e in response.data]
+
+results = vsc.get_index("vector_search_privacy", vs_index_fullname).similarity_search(
+  query_vector=embeddings[0],
+  columns=["url", "content"],
+  num_results=1)
+docs = results.get('result', {}).get('data_array', [])
+pprint(docs)
