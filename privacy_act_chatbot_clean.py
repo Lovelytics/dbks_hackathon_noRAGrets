@@ -142,14 +142,14 @@ endpoint_name = "openai_vector_search_v2"
 # COMMAND ----------
 
 # DBTITLE 1,No need to run again (already created)
-vsc.create_endpoint(name=endpoint_name, endpoint_type="STANDARD")
+# vsc.create_endpoint(name=endpoint_name, endpoint_type="STANDARD")
 vsc.create_delta_sync_index(
     endpoint_name=endpoint_name,
     index_name=vs_index_fullname,
     source_table_name="demo.hackathon.databricks_pdf_documentation_openai",
     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
     primary_key="id",
-    embedding_dimension=1024, #Match your model embedding size (bge)
+    embedding_dimension=1536, #Match your model embedding size (bge)
     embedding_vector_column="embedding"
   )
 
@@ -157,24 +157,9 @@ vsc.create_delta_sync_index(
 
 # DBTITLE 1,Run this to resync our index table with new results
 # Resync our index with new data
-vsc.get_index("privacy_vector_search", vs_index_fullname).sync()
+vsc.get_index(endpoint_name, vs_index_fullname).sync()
 
 # COMMAND ----------
 
-# DBTITLE 1,Test prompts (finish calling endpoint here)
-from mlflow.deployments import get_deploy_client
-from pprint import pprint
-
-deploy_client = get_deploy_client("databricks")
-
-question = "When did the colorado privacy act go into effect?"
-response = deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": [question]})
-embeddings = [e['embedding'] for e in response.data]
-
-results = vsc.get_index(endpoint_name, vs_index_fullname).similarity_search(
-  query_vector=embeddings[0],
-  columns=["url", "content"],
-  num_results=1)
-docs = results.get('result', {}).get('data_array', [])
-pprint(docs)
+# DBTITLE 1,Test prompts (call embedding endpoint here)
 
