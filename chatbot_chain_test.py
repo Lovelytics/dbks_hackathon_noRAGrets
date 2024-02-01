@@ -24,7 +24,7 @@ print(chain.invoke({"question": "What is Spark?"}))
 
 # COMMAND ----------
 
-index_name=f"demo.hackathon.pdf_index_v2"
+index_name=f"demo.hackathon.databricks_pdf_documentation_self_managed_vs_index"
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 
 # COMMAND ----------
@@ -42,13 +42,13 @@ def get_retriever(persist_dir: str = None):
     #Get the vector search index
     vsc = VectorSearchClient(workspace_url=host)
     vs_index = vsc.get_index(
-        endpoint_name="vector_search_endpoint",
+        endpoint_name="privacy_vector_search",
         index_name=index_name
     )
 
     # Create the retriever
     vectorstore = DatabricksVectorSearch(
-        vs_index, text_column="content", embedding=embedding_model, columns=["path", "content"]
+        vs_index, text_column="content", embedding=embedding_model, columns=["url", "content"]
     )
     return vectorstore.as_retriever(search_kwargs={'k': 4})
 
@@ -67,4 +67,8 @@ retrieve_document_chain = (
     | RunnableLambda(extract_question)
     | retriever
 )
-print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "What do data rights mean?"}]}))
+print(retrieve_document_chain.invoke({"messages": [{"role": "user", "content": "What is the effective date for the Utah Privacy Act?"}]}))
+
+# COMMAND ----------
+
+
