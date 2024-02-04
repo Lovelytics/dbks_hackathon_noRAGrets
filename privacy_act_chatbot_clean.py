@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" llama-index==0.9.40 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0 protobuf==3.20.0 openai==1.10.0 langchain-openai langchain
+# MAGIC %pip install transformers==4.30.2 "unstructured[pdf,docx]==0.10.30" llama-index==0.9.40 databricks-vectorsearch==0.20 pydantic==1.10.9 mlflow==2.9.0 protobuf==3.20.0 openai==1.10.0 langchain-openai langchain torch torchvision torchaudio FlagEmbedding
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -162,4 +162,34 @@ vsc.get_index(endpoint_name, vs_index_fullname).sync()
 # COMMAND ----------
 
 # DBTITLE 1,Test prompts (call embedding endpoint here)
+from mlflow.deployments import get_deploy_client
+from pprint import pprint
+# bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
+deploy_client = get_deploy_client("databricks")
+query = f"When does the Colorado Privacy Act take effect?"
 
+results = vsc.get_index(endpoint_name, vs_index_fullname).similarity_search(
+  query_vector = open_ai_embeddings(query),
+  columns=["url", "content"],
+  num_results=10)
+docs = results.get('result', {}).get('data_array', [])
+pprint(docs)
+
+# COMMAND ----------
+
+# DBTITLE 1,Reranking with bge-reranker-large
+# Load model directly
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from FlagEmbedding import FlagReranker
+
+tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
+model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
+
+reranker = FlagReranker('BAAI/bge-reranker-large', use_fp16=True) # Setting use_fp16 to True speeds up computation with a slight performance degradation
+query_and_docs = [[query, d[1]] for d in docs]
+
+scores = reranker.compute_score(query_and_docs)
+
+reranked_docs = sorted(list(zip(docs, scores)), key=lambda x: x[1], reverse=True)
+
+pprint(reranked_docs)
