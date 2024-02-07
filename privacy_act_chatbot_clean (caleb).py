@@ -296,26 +296,64 @@ vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).sync()
 
 # COMMAND ----------
 
+import mlflow.deployments
+import ast
+
+
+def get_state_from_query(query):
+    client = mlflow.deployments.get_deploy_client("databricks")
+    inputs = {
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""
+                You determine if there are any US states present in this text: {query}.
+                Your response should be JSON like the following:
+                {{ 
+                    "state": []
+                }}
+
+                """
+            }
+        ],
+        "max_tokens": 64,
+        "temperature": 0
+    }
+
+    response = client.predict(endpoint="databricks-mixtral-8x7b-instruct", inputs=inputs)
+    return response["choices"][0]['message']['content']
+
+# COMMAND ----------
+
 # DBTITLE 1,Test prompts (call embedding endpoint here)
 # from mlflow.deployments import get_deploy_client
 from pprint import pprint
 # bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
 # deploy_client = get_deploy_client("databricks")
-query = f"When does the Colorado Privacy Act take effect?"
+query = f"When does the Colorade Privacy Act go into effect?"
+response = get_state_from_query(query)
+cleaned_response = response.replace("```json", "")
+cleaned_response = cleaned_response.replace("```", "")
+filters = ast.literal_eval(cleaned_response)
 
 # COMMAND ----------
 
 # ADA embedding search
-results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
-  query_vector = open_ai_embeddings(query),
-  columns=["id","state", "url", "content"],
-  num_results=10)
-docs_ada = results_ada.get('result', {}).get('data_array', [])
-pprint(docs_ada)
-
-# COMMAND ----------
-
-open_ai_embeddings(query)
+if filters["state"] != []:
+  results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
+    query_vector = open_ai_embeddings(query),
+    columns=["id","state", "url", "content"],
+    filters=filters,
+    num_results=10)
+  docs_ada = results_ada.get('result', {}).get('data_array', [])
+  pprint(docs_ada)
+else:
+  results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
+    query_vector = open_ai_embeddings(query),
+    columns=["id","state", "url", "content"],
+    num_results=10)
+  docs_ada = results_ada.get('result', {}).get('data_array', [])
+  pprint(docs_ada)
 
 # COMMAND ----------
 
@@ -331,17 +369,22 @@ def get_bge_embeddings(query):
 
 # COMMAND ----------
 
-get_bge_embeddings(query)
-
-# COMMAND ----------
-
 # BGE embedding search
-results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
-  query_vector = get_bge_embeddings(query),
-  columns=["id","state", "url", "content"],
-  num_results=10)
-docs_bge = results_bge.get('result', {}).get('data_array', [])
-pprint(docs_bge)
+if filters["state"] != []:
+  results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
+    query_vector = get_bge_embeddings(query),
+    columns=["id","state", "url", "content"],
+    filters=filters,
+    num_results=10)
+  docs_bge = results_bge.get('result', {}).get('data_array', [])
+  pprint(docs_bge)
+else:
+  results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
+    query_vector = get_bge_embeddings(query),
+    columns=["id","state", "url", "content"],
+    num_results=10)
+  docs_bge = results_bge.get('result', {}).get('data_array', [])
+  pprint(docs_bge)
 
 # COMMAND ----------
 
@@ -365,11 +408,11 @@ pprint(docs_bge)
 # COMMAND ----------
 
 docs = docs_bge + docs_ada
-print(type(docs))
+dedup_docs = list(set(tuple(i) for i in docs))
+final_list = [list(i) for i in dedup_docs]
 
-# docs = set(docs)
-# docs = list(docs)
-print(len(docs_bge), len(docs_ada) , len(docs))
+print(final_list)
+# print(len(docs_bge), len(docs_ada) , len(dedup_docs))
 
 # COMMAND ----------
 
@@ -382,10 +425,14 @@ tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
 model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
 
 reranker = FlagReranker('BAAI/bge-reranker-large', use_fp16=True) # Setting use_fp16 to True speeds up computation with a slight performance degradation
-query_and_docs = [[query, d[1]] for d in docs]
+query_and_docs = [[query, d[1]] for d in final_list]
 
 scores = reranker.compute_score(query_and_docs)
 
-reranked_docs = sorted(list(zip(docs, scores)), key=lambda x: x[1], reverse=True)
+reranked_docs = sorted(list(zip(final_list, scores)), key=lambda x: x[1], reverse=True)
 
 pprint(reranked_docs)
+
+# COMMAND ----------
+
+
