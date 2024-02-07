@@ -176,6 +176,52 @@ temp = (spark.table('demo.hackathon.pdf_raw')
 
 # COMMAND ----------
 
+# MAGIC %sql
+# MAGIC use catalog `demo`; 
+# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
+# MAGIC
+# MAGIC
+
+# COMMAND ----------
+
+table = spark.table('demo.hackathon.databricks_pdf_documentation_baai')
+table = table.dropDuplicates(subset=["content"])
+
+(table.write
+    .option("overwriteSchema", "true")
+    .mode("overwrite")
+    .saveAsTable('demo.hackathon.databricks_pdf_documentation_baai'))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC use catalog `demo`; 
+# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC use catalog `demo`; 
+# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
+
+# COMMAND ----------
+
+table = spark.table('demo.hackathon.databricks_pdf_documentation_openai')
+table = table.dropDuplicates(subset=["content"])
+
+(table.write
+    .option("overwriteSchema", "true")
+    .mode("overwrite")
+    .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC use catalog `demo`; 
+# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
+
+# COMMAND ----------
+
 # workaround for not having ML cluster
 temp = (spark.table('demo.hackathon.databricks_pdf_documentation_openai')
         .withColumn("state", F.split(F.col("url"), "/")[5])
@@ -192,9 +238,9 @@ temp = (spark.table('demo.hackathon.databricks_pdf_documentation_openai')
 
 # DBTITLE 1,BGE Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
-vsc_bge = VectorSearchClient()
-vs_index_fullname = "demo.hackathon.bge_self_managed_index"
-endpoint_name = "bge_vector_search"
+vsc_bge = VectorSearchClient(disable_notice=True)
+vs_index_fullname_bge = "demo.hackathon.bge_self_managed_index"
+endpoint_name_bge = "bge_vector_search"
 
 # COMMAND ----------
 
@@ -204,10 +250,10 @@ endpoint_name = "bge_vector_search"
 # COMMAND ----------
 
 # DBTITLE 1,Endpoint creation (one-time run)
-#vsc_bge.create_endpoint(name=endpoint_name, endpoint_type="STANDARD")
+#vsc_bge.create_endpoint(name=endpoint_name_bge, endpoint_type="STANDARD")
 vsc_bge.create_delta_sync_index(
-    endpoint_name=endpoint_name,
-    index_name=vs_index_fullname,
+    endpoint_name=endpoint_name_bge,
+    index_name=vs_index_fullname_bge,
     source_table_name="demo.hackathon.databricks_pdf_documentation_baai",
     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
     primary_key="id",
@@ -219,16 +265,16 @@ vsc_bge.create_delta_sync_index(
 
 # DBTITLE 1,ADA Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
-vsc_ada = VectorSearchClient()
-vs_index_fullname = "demo.hackathon.ada_self_managed_index"
-endpoint_name = "ada_vector_search"
+vsc_ada = VectorSearchClient(disable_notice=True)
+vs_index_fullname_ada = "demo.hackathon.ada_self_managed_index"
+endpoint_name_ada = "ada_vector_search"
 
 # COMMAND ----------
 
-vsc_ada.create_endpoint(name=endpoint_name, endpoint_type="STANDARD")
+# vsc_ada.create_endpoint(name=endpoint_name_ada, endpoint_type="STANDARD")
 vsc_ada.create_delta_sync_index(
-    endpoint_name=endpoint_name,
-    index_name=vs_index_fullname,
+    endpoint_name=endpoint_name_ada,
+    index_name=vs_index_fullname_ada,
     source_table_name="demo.hackathon.databricks_pdf_documentation_openai",
     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
     primary_key="id",
@@ -239,42 +285,63 @@ vsc_ada.create_delta_sync_index(
 # COMMAND ----------
 
 # DBTITLE 1,Resync BGE Embeddings
-# TODO: Update embedding names
-from databricks.vector_search.client import VectorSearchClient
-vsc = VectorSearchClient()
-vs_index_fullname = "demo.hackathon.open_ai_self_managed_index_v3"
-endpoint_name = "open_ai_vector_search_v3"
-
 # Resync our index with new data
-vsc.get_index(endpoint_name, vs_index_fullname).sync()
+vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).sync()
 
 # COMMAND ----------
 
 # DBTITLE 1,Resync ADA Embeddings
-# TODO: Update embedding names
-from databricks.vector_search.client import VectorSearchClient
-vsc = VectorSearchClient()
-vs_index_fullname = "demo.hackathon.open_ai_self_managed_index_v3"
-endpoint_name = "open_ai_vector_search_v3"
-
 # Resync our index with new data
-vsc.get_index(endpoint_name, vs_index_fullname).sync()
+vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).sync()
 
 # COMMAND ----------
 
 # DBTITLE 1,Test prompts (call embedding endpoint here)
-from mlflow.deployments import get_deploy_client
+# from mlflow.deployments import get_deploy_client
 from pprint import pprint
 # bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
-deploy_client = get_deploy_client("databricks")
+# deploy_client = get_deploy_client("databricks")
 query = f"When does the Colorado Privacy Act take effect?"
 
-results = vsc.get_index(endpoint_name, vs_index_fullname).similarity_search(
+# COMMAND ----------
+
+# ADA embedding search
+results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
   query_vector = open_ai_embeddings(query),
-  columns=["state", "url", "content"],
+  columns=["id","state", "url", "content"],
   num_results=10)
-docs = results.get('result', {}).get('data_array', [])
-pprint(docs)
+docs_ada = results_ada.get('result', {}).get('data_array', [])
+pprint(docs_ada)
+
+# COMMAND ----------
+
+open_ai_embeddings(query)
+
+# COMMAND ----------
+
+# Ad-hoc BGE embedding function
+import mlflow.deployments
+bge_deploy_client = mlflow.deployments.get_deploy_client("databricks")
+
+def get_bge_embeddings(query):
+    #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+    response = bge_deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": query})
+    #return [e['embedding'] for e in response.data]
+    return response.data[0]['embedding']
+
+# COMMAND ----------
+
+get_bge_embeddings(query)
+
+# COMMAND ----------
+
+# BGE embedding search
+results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
+  query_vector = get_bge_embeddings(query),
+  columns=["id","state", "url", "content"],
+  num_results=10)
+docs_bge = results_bge.get('result', {}).get('data_array', [])
+pprint(docs_bge)
 
 # COMMAND ----------
 
@@ -294,6 +361,15 @@ pprint(docs)
 # docs = results.get('result', {}).get('data_array', [])
 # pprint(docs)
 
+
+# COMMAND ----------
+
+docs = docs_bge + docs_ada
+print(type(docs))
+
+# docs = set(docs)
+# docs = list(docs)
+print(len(docs_bge), len(docs_ada) , len(docs))
 
 # COMMAND ----------
 
