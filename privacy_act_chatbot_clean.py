@@ -4,10 +4,12 @@
 
 # COMMAND ----------
 
+import io
+import re
+
 # DBTITLE 1,Helper function for read_from_text
 from unstructured.partition.auto import partition
-import re
-import io
+
 
 def extract_doc_text(x : bytes) -> str:
   # Read files and extract the values with unstructured
@@ -21,13 +23,12 @@ def extract_doc_text(x : bytes) -> str:
 
 # COMMAND ----------
 
-import pandas as pd
-
-# COMMAND ----------
-
 # DBTITLE 1,Databricks BGE Embedding
 import pandas as pd
 from pyspark.sql.functions import pandas_udf
+
+# COMMAND ----------
+
 
 @pandas_udf("array<float>")
 def get_embedding(contents: pd.Series) -> pd.Series:
@@ -51,20 +52,21 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+import logging
+import os
+from typing import Iterator
+
+import mypy_extensions
+import pandas as pd
+from langchain_openai import AzureOpenAIEmbeddings
+from llama_index import Document, set_global_tokenizer
 # DBTITLE 1,OpenAI Client and read as chunk function defined
 from llama_index.langchain_helpers.text_splitter import SentenceSplitter
 from llama_index.node_parser import SemanticSplitterNodeParser
-from llama_index import Document, set_global_tokenizer
-from transformers import AutoTokenizer
-from pyspark.sql.functions import pandas_udf
-from typing import Iterator
-import pandas as pd
-import os
-import logging
-from pyspark.sql import functions as F
-import mypy_extensions
 from openai import AzureOpenAI
-from langchain_openai import AzureOpenAIEmbeddings
+from pyspark.sql import functions as F
+from pyspark.sql.functions import pandas_udf
+from transformers import AutoTokenizer
 
 os.environ["AZURE_OPENAI_API_KEY"] = dbutils.secrets.get(scope='dev_demo', key='azure_openai_api_key')
 os.environ["AZURE_OPENAI_ENDPOINT"] = "https://nous-ue2-openai-sbx-openai.openai.azure.com/"
@@ -135,10 +137,13 @@ def open_ai_embeddings(contents):
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
+import os
+
 import mypy_extensions
 import pandas as pd
-import os
+# DBTITLE 1,BGE Vector Search Client
+from databricks.vector_search.client import VectorSearchClient
+from pyspark.sql import functions as F
 
 # COMMAND ----------
 
@@ -247,8 +252,6 @@ import os
 
 # COMMAND ----------
 
-# DBTITLE 1,BGE Vector Search Client
-from databricks.vector_search.client import VectorSearchClient
 vsc_bge = VectorSearchClient(disable_notice=True)
 vs_index_fullname_bge = "demo.hackathon.bge_self_managed_index"
 endpoint_name_bge = "bge_vector_search"
@@ -276,6 +279,7 @@ endpoint_name_bge = "bge_vector_search"
 
 # DBTITLE 1,ADA Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
+
 vsc_ada = VectorSearchClient(disable_notice=True)
 vs_index_fullname_ada = "demo.hackathon.ada_self_managed_index"
 endpoint_name_ada = "ada_vector_search"
@@ -307,8 +311,9 @@ endpoint_name_ada = "ada_vector_search"
 
 # COMMAND ----------
 
-import mlflow.deployments
 import ast
+
+import mlflow.deployments
 
 
 def get_state_from_query(query):
@@ -340,6 +345,7 @@ def get_state_from_query(query):
 
 # from mlflow.deployments import get_deploy_client
 from pprint import pprint
+
 # bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
 # deploy_client = get_deploy_client("databricks")
 
@@ -373,6 +379,7 @@ else:
 
 # Ad-hoc BGE embedding function
 import mlflow.deployments
+
 bge_deploy_client = mlflow.deployments.get_deploy_client("databricks")
 
 def get_bge_embeddings(query):
@@ -431,10 +438,10 @@ print(final_list)
 
 # COMMAND ----------
 
+from FlagEmbedding import FlagReranker
 # DBTITLE 1,Reranking with bge-reranker-large
 # Load model directly
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from FlagEmbedding import FlagReranker
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
 model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
