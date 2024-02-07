@@ -4,10 +4,12 @@
 
 # COMMAND ----------
 
+import io
+import re
+
 # DBTITLE 1,Helper function for read_from_text
 from unstructured.partition.auto import partition
-import re
-import io
+
 
 def extract_doc_text(x : bytes) -> str:
   # Read files and extract the values with unstructured
@@ -23,6 +25,9 @@ def extract_doc_text(x : bytes) -> str:
 
 # DBTITLE 1,Databricks BGE Embedding
 import pandas as pd
+from pyspark.sql.functions import pandas_udf
+
+# COMMAND ----------
 
 
 @pandas_udf("array<float>")
@@ -47,20 +52,21 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+import logging
+import os
+from typing import Iterator
+
+import mypy_extensions
+import pandas as pd
+from langchain_openai import AzureOpenAIEmbeddings
+from llama_index import Document, set_global_tokenizer
 # DBTITLE 1,OpenAI Client and read as chunk function defined
 from llama_index.langchain_helpers.text_splitter import SentenceSplitter
 from llama_index.node_parser import SemanticSplitterNodeParser
-from llama_index import Document, set_global_tokenizer
-from transformers import AutoTokenizer
-from pyspark.sql.functions import pandas_udf
-from typing import Iterator
-import pandas as pd
-import os
-import logging
-from pyspark.sql import functions as F
-import mypy_extensions
 from openai import AzureOpenAI
-from langchain_openai import AzureOpenAIEmbeddings
+from pyspark.sql import functions as F
+from pyspark.sql.functions import pandas_udf
+from transformers import AutoTokenizer
 
 os.environ["AZURE_OPENAI_API_KEY"] = dbutils.secrets.get(scope='dev_demo', key='azure_openai_api_key')
 os.environ["AZURE_OPENAI_ENDPOINT"] = "https://nous-ue2-openai-sbx-openai.openai.azure.com/"
@@ -131,173 +137,183 @@ def open_ai_embeddings(contents):
 
 # COMMAND ----------
 
-# DBTITLE 1,Write to databricks_pdf_documentation_openai
-from pyspark.sql import functions as F
-import mypy_extensions
-import pandas as pd
 import os
 
-# # Reduce the arrow batch size as our PDF can be big in memory
-# spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
-
-# os.environ["HF_HOME"] = '/tmp'
-
-volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/*"
-
-# ADA Embeddings
-temp = (spark.table('demo.hackathon.pdf_raw')
-        .withColumn("content", F.explode(read_as_chunk("content")))
-        .withColumn("ada_embedding", F.lit(open_ai_embeddings("content")))
-        .withColumn("id", F.monotonically_increasing_id())
-        .withColumn("state", F.split(F.col("path"), "/")[5])
-        .selectExpr('id', 'path as url', 'content', 'ada_embedding', 'state')
-        )
-
-(temp.write
-    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_openai')
-    .option("overwriteSchema", "true")
-    .mode("overwrite")
-    .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
-
-# BGE Embeddings
-temp = (spark.table('demo.hackathon.pdf_raw')
-        .withColumn("content", F.explode(read_as_chunk("content")))
-        .withColumn("bge_embedding", F.lit(get_embedding("content")))
-        .withColumn("id", F.monotonically_increasing_id())
-        .withColumn("state", F.split(F.col("path"), "/")[5])
-        .selectExpr('id', 'path as url', 'content', 'bge_embedding', 'state')
-        )
-
-(temp.write
-    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_baai')
-    .option("overwriteSchema", "true")
-    .mode("overwrite")
-    .saveAsTable('demo.hackathon.databricks_pdf_documentation_baai'))
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC use catalog `demo`; 
-# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
-# MAGIC
-# MAGIC
-
-# COMMAND ----------
-
-table = spark.table('demo.hackathon.databricks_pdf_documentation_baai')
-table = table.dropDuplicates(subset=["content"])
-
-(table.write
-    .option("overwriteSchema", "true")
-    .mode("overwrite")
-    .saveAsTable('demo.hackathon.databricks_pdf_documentation_baai'))
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC use catalog `demo`; 
-# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC use catalog `demo`; 
-# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
-
-# COMMAND ----------
-
-table = spark.table('demo.hackathon.databricks_pdf_documentation_openai')
-table = table.dropDuplicates(subset=["content"])
-
-(table.write
-    .option("overwriteSchema", "true")
-    .mode("overwrite")
-    .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC use catalog `demo`; 
-# MAGIC select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
-
-# COMMAND ----------
-
-# workaround for not having ML cluster
-temp = (spark.table('demo.hackathon.databricks_pdf_documentation_openai')
-        .withColumn("state", F.split(F.col("url"), "/")[5])
-        .selectExpr('id', 'url', 'content', 'embedding', 'state')
-        )
-
-(temp.write
-    .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_openai')
-    .option("overwriteSchema", "true")
-    .mode("overwrite")
-    .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
-
-# COMMAND ----------
-
+import mypy_extensions
+import pandas as pd
 # DBTITLE 1,BGE Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
+from pyspark.sql import functions as F
+
+# COMMAND ----------
+
+# DBTITLE 1,Write to databricks_pdf_documentation_openai
+# from pyspark.sql import functions as F
+# import mypy_extensions
+# import pandas as pd
+# import os
+
+# # # Reduce the arrow batch size as our PDF can be big in memory
+# # spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", 10)
+
+# # os.environ["HF_HOME"] = '/tmp'
+
+# volume_folder = f"/Volumes/demo/hackathon/privacy_act_docs/*"
+
+# # ADA Embeddings
+# temp = (spark.table('demo.hackathon.pdf_raw')
+#         .withColumn("content", F.explode(read_as_chunk("content")))
+#         .withColumn("ada_embedding", F.lit(open_ai_embeddings("content")))
+#         .withColumn("id", F.monotonically_increasing_id())
+#         .withColumn("state", F.split(F.col("path"), "/")[5])
+#         .selectExpr('id', 'path as url', 'content', 'ada_embedding', 'state')
+#         )
+
+# (temp.write
+#     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_openai')
+#     .option("overwriteSchema", "true")
+#     .mode("overwrite")
+#     .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
+
+# # BGE Embeddings
+# temp = (spark.table('demo.hackathon.pdf_raw')
+#         .withColumn("content", F.explode(read_as_chunk("content")))
+#         .withColumn("bge_embedding", F.lit(get_embedding("content")))
+#         .withColumn("id", F.monotonically_increasing_id())
+#         .withColumn("state", F.split(F.col("path"), "/")[5])
+#         .selectExpr('id', 'path as url', 'content', 'bge_embedding', 'state')
+#         )
+
+# (temp.write
+#     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_baai')
+#     .option("overwriteSchema", "true")
+#     .mode("overwrite")
+#     .saveAsTable('demo.hackathon.databricks_pdf_documentation_baai'))
+
+# COMMAND ----------
+
+# %sql
+# use catalog `demo`; 
+# select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
+
+
+
+# COMMAND ----------
+
+# table = spark.table('demo.hackathon.databricks_pdf_documentation_baai')
+# table = table.dropDuplicates(subset=["content"])
+
+# (table.write
+#     .option("overwriteSchema", "true")
+#     .mode("overwrite")
+#     .saveAsTable('demo.hackathon.databricks_pdf_documentation_baai'))
+
+# COMMAND ----------
+
+# %sql
+# use catalog `demo`; 
+# select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_baai` 
+
+# COMMAND ----------
+
+# %sql
+# use catalog `demo`; 
+# select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
+
+# COMMAND ----------
+
+# table = spark.table('demo.hackathon.databricks_pdf_documentation_openai')
+# table = table.dropDuplicates(subset=["content"])
+
+# (table.write
+#     .option("overwriteSchema", "true")
+#     .mode("overwrite")
+#     .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
+
+# COMMAND ----------
+
+# %sql
+# use catalog `demo`; 
+# select count(*), count(distinct content) from `hackathon`.`databricks_pdf_documentation_openai` 
+
+# COMMAND ----------
+
+# # workaround for not having ML cluster
+# temp = (spark.table('demo.hackathon.databricks_pdf_documentation_openai')
+#         .withColumn("state", F.split(F.col("url"), "/")[5])
+#         .selectExpr('id', 'url', 'content', 'embedding', 'state')
+#         )
+
+# (temp.write
+#     .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/pdf_chunk_openai')
+#     .option("overwriteSchema", "true")
+#     .mode("overwrite")
+#     .saveAsTable('demo.hackathon.databricks_pdf_documentation_openai'))
+
+# COMMAND ----------
+
 vsc_bge = VectorSearchClient(disable_notice=True)
 vs_index_fullname_bge = "demo.hackathon.bge_self_managed_index"
 endpoint_name_bge = "bge_vector_search"
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC ALTER TABLE demo.hackathon.databricks_pdf_documentation_baai SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+# %sql
+# ALTER TABLE demo.hackathon.databricks_pdf_documentation_baai SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
 
 # COMMAND ----------
 
 # DBTITLE 1,Endpoint creation (one-time run)
-#vsc_bge.create_endpoint(name=endpoint_name_bge, endpoint_type="STANDARD")
-vsc_bge.create_delta_sync_index(
-    endpoint_name=endpoint_name_bge,
-    index_name=vs_index_fullname_bge,
-    source_table_name="demo.hackathon.databricks_pdf_documentation_baai",
-    pipeline_type="TRIGGERED", #Sync needs to be manually triggered
-    primary_key="id",
-    embedding_dimension=1024, #Match your model embedding size (bge = 1024, ada = 1536)
-    embedding_vector_column="bge_embedding"
-  )
+# #vsc_bge.create_endpoint(name=endpoint_name_bge, endpoint_type="STANDARD")
+# vsc_bge.create_delta_sync_index(
+#     endpoint_name=endpoint_name_bge,
+#     index_name=vs_index_fullname_bge,
+#     source_table_name="demo.hackathon.databricks_pdf_documentation_baai",
+#     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
+#     primary_key="id",
+#     embedding_dimension=1024, #Match your model embedding size (bge = 1024, ada = 1536)
+#     embedding_vector_column="bge_embedding"
+#   )
 
 # COMMAND ----------
 
 # DBTITLE 1,ADA Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
+
 vsc_ada = VectorSearchClient(disable_notice=True)
 vs_index_fullname_ada = "demo.hackathon.ada_self_managed_index"
 endpoint_name_ada = "ada_vector_search"
 
 # COMMAND ----------
 
-# vsc_ada.create_endpoint(name=endpoint_name_ada, endpoint_type="STANDARD")
-vsc_ada.create_delta_sync_index(
-    endpoint_name=endpoint_name_ada,
-    index_name=vs_index_fullname_ada,
-    source_table_name="demo.hackathon.databricks_pdf_documentation_openai",
-    pipeline_type="TRIGGERED", #Sync needs to be manually triggered
-    primary_key="id",
-    embedding_dimension=1536, #Match your model embedding size (bge = 1024, ada = 1536)
-    embedding_vector_column="ada_embedding"
-  )
+# # vsc_ada.create_endpoint(name=endpoint_name_ada, endpoint_type="STANDARD")
+# vsc_ada.create_delta_sync_index(
+#     endpoint_name=endpoint_name_ada,
+#     index_name=vs_index_fullname_ada,
+#     source_table_name="demo.hackathon.databricks_pdf_documentation_openai",
+#     pipeline_type="TRIGGERED", #Sync needs to be manually triggered
+#     primary_key="id",
+#     embedding_dimension=1536, #Match your model embedding size (bge = 1024, ada = 1536)
+#     embedding_vector_column="ada_embedding"
+#   )
 
 # COMMAND ----------
 
 # DBTITLE 1,Resync BGE Embeddings
-# Resync our index with new data
-vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).sync()
+# # Resync our index with new data
+# vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).sync()
 
 # COMMAND ----------
 
 # DBTITLE 1,Resync ADA Embeddings
-# Resync our index with new data
-vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).sync()
+# # Resync our index with new data
+# vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).sync()
 
 # COMMAND ----------
 
-import mlflow.deployments
 import ast
+
+import mlflow.deployments
 
 
 def get_state_from_query(query):
@@ -329,9 +345,12 @@ def get_state_from_query(query):
 
 # from mlflow.deployments import get_deploy_client
 from pprint import pprint
+
 # bge-large-en Foundation models are available using the /serving-endpoints/databricks-bge-large-en/invocations api. 
 # deploy_client = get_deploy_client("databricks")
-query = f"When does the Colorade Privacy Act go into effect?"
+
+query = f"What rights can consumers exercise?"
+# What is considered biometric data?
 response = get_state_from_query(query)
 cleaned_response = response.replace("```json", "")
 cleaned_response = cleaned_response.replace("```", "")
@@ -360,6 +379,7 @@ else:
 
 # Ad-hoc BGE embedding function
 import mlflow.deployments
+
 bge_deploy_client = mlflow.deployments.get_deploy_client("databricks")
 
 def get_bge_embeddings(query):
@@ -418,10 +438,10 @@ print(final_list)
 
 # COMMAND ----------
 
+from FlagEmbedding import FlagReranker
 # DBTITLE 1,Reranking with bge-reranker-large
 # Load model directly
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from FlagEmbedding import FlagReranker
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
 model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
@@ -437,3 +457,33 @@ reranked_docs = sorted(list(zip(final_list, scores)), key=lambda x: x[1], revers
 pprint(reranked_docs)
 
 # COMMAND ----------
+
+#reranked_docs[0][0][3].replace("\n"," ")
+
+# COMMAND ----------
+
+userquery = '''Summarize this result: '''
+
+def mixtral_query(userquery):
+    client = mlflow.deployments.get_deploy_client("databricks")
+    inputs = {
+        "messages": [{"role":"user","content":f"{userquery} {reranked_docs[0][0][3]}"}],
+        "max_tokens": 1500,
+        "temperature": 0.8
+    }
+
+    response = client.predict(endpoint="databricks-mixtral-8x7b-instruct", inputs=inputs)
+    return response["choices"][0]['message']['content']
+
+# COMMAND ----------
+
+print(mixtral_query(userquery))
+
+# COMMAND ----------
+
+# print LLM output
+print(mixtral_query(userquery), 
+f"\n\nDocument from State: {reranked_docs[0][0][1]}",
+f"\nResult id: {reranked_docs[0][0][0]}",
+f"\nDocument path: {reranked_docs[0][0][2]}"
+)
