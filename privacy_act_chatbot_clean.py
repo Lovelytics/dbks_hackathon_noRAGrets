@@ -4,10 +4,10 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Helper function for read_from_text
 import io
 import re
 
-# DBTITLE 1,Helper function for read_from_text
 from unstructured.partition.auto import partition
 
 
@@ -52,6 +52,7 @@ def get_embedding(contents: pd.Series) -> pd.Series:
 
 # COMMAND ----------
 
+# DBTITLE 1,OpenAI Client and read as chunk function defined
 import logging
 import os
 from typing import Iterator
@@ -60,7 +61,6 @@ import mypy_extensions
 import pandas as pd
 from langchain_openai import AzureOpenAIEmbeddings
 from llama_index import Document, set_global_tokenizer
-# DBTITLE 1,OpenAI Client and read as chunk function defined
 from llama_index.langchain_helpers.text_splitter import SentenceSplitter
 from llama_index.node_parser import SemanticSplitterNodeParser
 from openai import AzureOpenAI
@@ -137,11 +137,11 @@ def open_ai_embeddings(contents):
 
 # COMMAND ----------
 
+# DBTITLE 1,BGE Vector Search Client
 import os
 
 import mypy_extensions
 import pandas as pd
-# DBTITLE 1,BGE Vector Search Client
 from databricks.vector_search.client import VectorSearchClient
 from pyspark.sql import functions as F
 
@@ -337,7 +337,12 @@ def get_state_from_query(query):
     }
 
     response = client.predict(endpoint="databricks-mixtral-8x7b-instruct", inputs=inputs)
-    return response["choices"][0]['message']['content']
+    response_content = response["choices"][0]['message']['content']
+    cleaned_response = response_content.replace("```json", "")
+    cleaned_response = cleaned_response.replace("```", "")
+    filters = ast.literal_eval(cleaned_response)
+
+    return filters
 
 # COMMAND ----------
 
@@ -351,29 +356,30 @@ from pprint import pprint
 
 query = f"What rights can consumers exercise?"
 # What is considered biometric data?
-response = get_state_from_query(query)
-cleaned_response = response.replace("```json", "")
-cleaned_response = cleaned_response.replace("```", "")
-filters = ast.literal_eval(cleaned_response)
+state_filters = get_state_from_query(query)
+print(state_filters)
 
 # COMMAND ----------
 
-# ADA embedding search
-if filters["state"] != []:
-  results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
-    query_vector = open_ai_embeddings(query),
-    columns=["id","state", "url", "content"],
-    filters=filters,
-    num_results=10)
-  docs_ada = results_ada.get('result', {}).get('data_array', [])
-  pprint(docs_ada)
-else:
-  results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
-    query_vector = open_ai_embeddings(query),
-    columns=["id","state", "url", "content"],
-    num_results=10)
-  docs_ada = results_ada.get('result', {}).get('data_array', [])
-  pprint(docs_ada)
+def get_ada_docs(query, filters, n=10):
+  # ADA embedding search
+  if filters["state"] != []:
+    results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
+      query_vector = open_ai_embeddings(query),
+      columns=["id", "state", "url", "content"],
+      filters=filters,
+      num_results=n)
+    docs_ada = results_ada.get('result', {}).get('data_array', [])
+  else:
+    results_ada = vsc_ada.get_index(endpoint_name_ada, vs_index_fullname_ada).similarity_search(
+      query_vector = open_ai_embeddings(query),
+      columns=["id", "state", "url", "content"],
+      num_results=n)
+    docs_ada = results_ada.get('result', {}).get('data_array', [])
+  return docs_ada
+
+docs_ada = get_ada_docs(query, state_filters)
+pprint(docs_ada)
 
 # COMMAND ----------
 
@@ -382,30 +388,38 @@ import mlflow.deployments
 
 bge_deploy_client = mlflow.deployments.get_deploy_client("databricks")
 
-def get_bge_embeddings(query):
-    #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
-    response = bge_deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": query})
-    #return [e['embedding'] for e in response.data]
-    return response.data[0]['embedding']
+# def get_bge_embeddings(query):
+#     #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+#     response = bge_deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": query})
+#     return response.data[0]['embedding']
 
 # COMMAND ----------
 
-# BGE embedding search
-if filters["state"] != []:
-  results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
-    query_vector = get_bge_embeddings(query),
-    columns=["id","state", "url", "content"],
-    filters=filters,
-    num_results=10)
-  docs_bge = results_bge.get('result', {}).get('data_array', [])
-  pprint(docs_bge)
-else:
-  results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
-    query_vector = get_bge_embeddings(query),
-    columns=["id","state", "url", "content"],
-    num_results=10)
-  docs_bge = results_bge.get('result', {}).get('data_array', [])
-  pprint(docs_bge)
+
+def get_bge_docs(query, filters, n=10):
+  def get_bge_embeddings(query):
+    #Note: this will fail if an exception is thrown during embedding creation (add try/except if needed) 
+    response = bge_deploy_client.predict(endpoint="databricks-bge-large-en", inputs={"input": query})
+    return response.data[0]['embedding']
+  
+  # BGE embedding search
+  if filters["state"] != []:
+    results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
+      query_vector = get_bge_embeddings(query),
+      columns=["id", "state", "url", "content"],
+      filters=filters,
+      num_results=n)
+    docs_bge = results_bge.get('result', {}).get('data_array', [])
+  else:
+    results_bge = vsc_bge.get_index(endpoint_name_bge, vs_index_fullname_bge).similarity_search(
+      query_vector = get_bge_embeddings(query),
+      columns=["id", "state", "url", "content"],
+      num_results=n)
+    docs_bge = results_bge.get('result', {}).get('data_array', [])
+  return docs_bge
+
+docs_bge = get_bge_docs(query, state_filters)
+pprint(docs_bge)
 
 # COMMAND ----------
 
@@ -428,9 +442,13 @@ else:
 
 # COMMAND ----------
 
-docs = docs_bge + docs_ada
-dedup_docs = list(set(tuple(i) for i in docs))
-final_list = [list(i) for i in dedup_docs]
+def combine_docs(docs_bge, docs_ada):
+    docs = docs_bge + docs_ada
+    dedup_docs = list(set(tuple(i) for i in docs))
+    final_list = [list(i) for i in dedup_docs]
+    return final_list
+
+final_list = combine_docs(docs_bge, docs_ada)
 
 print(final_list)
 # print(len(docs_bge), len(docs_ada) , len(dedup_docs))
@@ -438,22 +456,26 @@ print(final_list)
 
 # COMMAND ----------
 
-from FlagEmbedding import FlagReranker
 # DBTITLE 1,Reranking with bge-reranker-large
+from FlagEmbedding import FlagReranker
 # Load model directly
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
-model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
+def reranker(query, docs):
+    tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-reranker-large")
+    model = AutoModelForSequenceClassification.from_pretrained("BAAI/bge-reranker-large")
 
-reranker = FlagReranker('BAAI/bge-reranker-large', use_fp16=True) # Setting use_fp16 to True speeds up computation with a slight performance degradation
+    reranker_model = FlagReranker('BAAI/bge-reranker-large', use_fp16=True) # Setting use_fp16 to True speeds up computation with a slight performance degradation
 
-query_and_docs = [[query, d[1]] for d in final_list]
+    query_and_docs = [[query, d[1]] for d in docs]
 
-scores = reranker.compute_score(query_and_docs)
+    scores = reranker_model.compute_score(query_and_docs)
 
-reranked_docs = sorted(list(zip(final_list, scores)), key=lambda x: x[1], reverse=True)
+    reranked_docs = sorted(list(zip(docs, scores)), key=lambda x: x[1], reverse=True)
 
+    return reranked_docs
+
+reranked_docs = reranker(query, final_list)
 pprint(reranked_docs)
 
 # COMMAND ----------
@@ -464,20 +486,24 @@ pprint(reranked_docs)
 
 userquery = '''Summarize this result: '''
 
-def mixtral_query(userquery):
+def mixtral_query(userquery, reranked_docs):
     client = mlflow.deployments.get_deploy_client("databricks")
     inputs = {
-        "messages": [{"role":"user","content":f"{userquery} {reranked_docs[0][0][3]}"}],
+        "messages": [{"role":"user", "content":f"Summarize this result: {reranked_docs[0][0][3]}"}],
         "max_tokens": 1500,
         "temperature": 0.8
     }
 
     response = client.predict(endpoint="databricks-mixtral-8x7b-instruct", inputs=inputs)
-    return response["choices"][0]['message']['content']
+    result = (response["choices"][0]['message']['content'],
+            f"\n\nDocument from State: {reranked_docs[0][0][1]}",
+            f"\nResult id: {reranked_docs[0][0][0]}",
+            f"\nDocument path: {reranked_docs[0][0][2]}")
+    return result
 
 # COMMAND ----------
 
-print(mixtral_query(userquery))
+print(mixtral_query(userquery, reranked_docs))
 
 # COMMAND ----------
 
@@ -487,3 +513,88 @@ f"\n\nDocument from State: {reranked_docs[0][0][1]}",
 f"\nResult id: {reranked_docs[0][0][0]}",
 f"\nDocument path: {reranked_docs[0][0][2]}"
 )
+
+# COMMAND ----------
+
+from langchain.prompts import PromptTemplate
+
+prompt = PromptTemplate(
+  input_variables = ["query"],
+  template = "You are an assistant. Give a short answer to this question: {query}"
+)
+
+# COMMAND ----------
+
+from langchain.schema.runnable import RunnableLambda, RunnableBranch, RunnableParallel, RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+from operator import itemgetter
+
+full_chain = (
+  {
+    "query": RunnablePassthrough(),
+  }
+  |
+  {   
+    "filters": itemgetter("query") | RunnableLambda(get_state_from_query)
+  }
+  |
+  {
+    "relevant_ada_docs": {"query": itemgetter("query"), "filters": itemgetter("filters")} | RunnableLambda(get_ada_docs)
+  }
+  |
+  {
+    "relevant_bge_docs": {"query": itemgetter("query"), "filters": itemgetter("filters")} | RunnableLambda(get_bge_docs)
+  }
+  |
+  {
+    "combine_docs": {"docs_bge": itemgetter("relevant_bge_docs"), "docs_ada": itemgetter("relevant_ada_docs")} | RunnableLambda(combine_docs)
+  }
+  |
+  {
+    "rerank": itemgetter("combine_docs") | RunnableLambda(reranker)
+  }
+  | 
+  {
+    "result": itemgetter("rerank")
+  }
+  | RunnableLambda(mixtral_query) | StrOutputParser()
+)
+
+# COMMAND ----------
+
+full_chain.invoke({"query": query})
+
+# COMMAND ----------
+
+import cloudpickle
+import langchain
+from mlflow.models import infer_signature
+
+mlflow.set_registry_uri("databricks-hackathon")
+model_name = "demo.hackathon.privacy_chatbot_model"
+
+with mlflow.start_run(run_name="privacy_chatbot_rag") as run:
+    #Get our model signature from input/output
+    input = query
+    output = full_chain.invoke(query)
+    signature = infer_signature(input, output)
+
+    model_info = mlflow.langchain.log_model(
+        full_chain,
+        artifact_path="chain",
+        registered_model_name=model_name,
+        pip_requirements=[
+            "mlflow==" + mlflow.__version__,
+            "langchain==" + langchain.__version__,
+            "databricks-vectorsearch",
+            "pydantic==2.5.2 --no-binary pydantic",
+            "cloudpickle=="+ cloudpickle.__version__
+            ],
+        input_example=query,
+        signature=signature
+    )
+
+# COMMAND ----------
+
+model = mlflow.langchain.load_model(model_info.model_uri)
+model.invoke(dialog)
